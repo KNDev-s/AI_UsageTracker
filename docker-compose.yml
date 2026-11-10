@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ai-tracker-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ai_tracker_owner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ai_tracker_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-ai_usage_tracker}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init-roles.sql:/docker-entrypoint-initdb.d/01-init-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ai_tracker_owner} -d ${POSTGRES_DB:-ai_usage_tracker}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: ai-tracker-mailpit
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ai-tracker-api
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      APP_ENV: development
+      DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:-postgresql+psycopg://ai_tracker_owner:ai_tracker_dev_password@postgres:5432/ai_usage_tracker}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://ai_tracker_app:ai_tracker_app_dev_password@postgres:5432/ai_usage_tracker}
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: dev
+    container_name: ai-tracker-frontend
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v1}
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+
